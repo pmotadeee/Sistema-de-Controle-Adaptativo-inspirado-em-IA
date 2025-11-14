@@ -1,13 +1,4 @@
 #!/bin/bash
-
-echo "🚀 Instalando daemon bayesiano fodástico..."
-
-BIN_PATH="/usr/local/bin/bayes_opt.sh"
-SERVICE_PATH="/etc/systemd/system/bayes_opt.service"
-
-# 1. Script principal (o bicho feio todo)
-cat <<'EOF' > "$BIN_PATH"
-#!/bin/bash
 # Script ainda esta meio cagado, caso queira contribuir, que deus te abençoe, ou algum orixa aleatorio por ai
 BASE_DIR="/etc/bayes_mem"
 LOG_DIR="/var/log/bayes_mem"
@@ -24,6 +15,13 @@ initialize_directories() {
 }
 
 get_temp() {
+    # ------------------------------------------------------------
+    # INPUT (RNN) — canal térmico
+    # Esta função é parte da 'camada de entradas' do modelo conceitual.
+    # Retorna a temperatura (°C) obtida via `sensors`.
+    # No mapeamento RNN: get_temp() fornece uma feature contínua que
+    # será usada pelo forward pass e pelo cálculo de cooldowns.
+    # ------------------------------------------------------------
     local temp_raw
     temp_raw=$(sensors 2>/dev/null | awk '
         /[0-9]+\.[0-9]+°C/ {
@@ -40,10 +38,24 @@ get_temp() {
 }
 
 get_loadavg() {
+    # ------------------------------------------------------------
+    # INPUT (RNN) — camada de carga (trend features)
+    # Esta função fornece L1, L5, L15 via `uptime` e representa
+    # features de tendência temporal (entrada para o modelo).
+    # Essa informação é usada para detectar variações e calcular
+    # o delta de carga (gradiente temporal) que afeta cooldowns.
+    # ------------------------------------------------------------
     uptime | awk -F'load average: ' '{print $2}' | awk -F', ' '{print $1, $2, $3}'
 }
 
 get_load_variance() {
+    # ------------------------------------------------------------
+    # INPUT / FEATURE DERIVADA (RNN) — variação temporal
+    # read l1 l5 _ < <(get_loadavg)
+    # Calcula |L1 - L5| e retorna um escalar que indica quão rápida
+    # é a mudança de carga. No mapeamento RNN, é uma feature derivada
+    # que influencia o comportamento do controlador (via cooldowns).
+    # ------------------------------------------------------------
     read l1 l5 _ < <(get_loadavg)
     local delta=$(echo "$l1 - $l5" | bc -l)
     delta=$(echo "$delta" | sed 's/-//')
@@ -75,6 +87,17 @@ calc_impact_cooldown() {
 }
 
 faz_o_urro() {
+    # ------------------------------------------------------------
+    # MEMÓRIA (RNN - hidden state)
+    # Essa função implementa a 'memória recorrente degenerada':
+    # - lê o histórico persistido em arquivo
+    # - empilha o novo valor (uso de CPU atual)
+    # - trunca para MAX_HISTORY (janela deslizante)
+    # - calcula e retorna a média aritmética dos últimos N valores
+    # Na analogia com RNN: faz_o_urro() provê o hidden state h_t
+    # (memória de curto prazo) que é usado na inferência (policy).
+    # Persistência em arquivo permite estado entre reinícios do daemon.
+    # ------------------------------------------------------------
     local new_val="$1"
     local history_arr=()
     local sum=0 avg=0
@@ -88,6 +111,12 @@ faz_o_urro() {
 }
 
 get_cpu_usage() {
+    # ------------------------------------------------------------
+    # INPUT (RNN) — sensor primário (uso de CPU)
+    # Lê /proc/stat e calcula a utilização real da CPU entre duas
+    # amostras. Esta função produz a principal feature de entrada
+    # para o pipeline (x_t).
+    # ------------------------------------------------------------
     local stat_hist_file="${BASE_DIR}/last_stat"
     local cpu_line prev_line usage=0
     cpu_line=$(grep -E '^cpu ' /proc/stat)
@@ -104,6 +133,13 @@ get_cpu_usage() {
 }
 
 determine_policy_key_from_avg() {
+    # ------------------------------------------------------------
+    # POLICY (RNN - output layer / quantizer)
+    # Recebe a média (estado/memória) e quantiza para uma chave
+    # discreta (000..100). Essa função atua como a camada de
+    # ativação/decisão: transforma o valor contínuo em categorias
+    # discretas que serão consumidas pelos atuadores.
+    # ------------------------------------------------------------
     local avg_load=$1 key="000"
     (( avg_load >= 90 )) && key="100"
     (( avg_load >= 80 )) && key="080"
@@ -260,6 +296,15 @@ apply_zram_config() {
 }
 
 apply_all() {
+    # ------------------------------------------------------------
+    # FORWARD PASS (RNN) — pipeline de inferência e ação
+    # 1) coleta input primário: current_usage = x_t
+    # 2) atualiza memória: avg_usage = f(x_t, h_{t-1}) (faz_o_urro)
+    # 3) quantiza a saída: policy_key = g(avg_usage)
+    # 4) aplica atuadores (outputs): governor, TDP, ZRAM
+    # Este é o passo equivalente ao forward pass da RNN
+    # (sem aprendizado / sem ajuste de pesos).
+    # ------------------------------------------------------------
     local current_usage=$(get_cpu_usage)
     local avg_usage=$(faz_o_urro "$current_usage")
     local policy_key=$(determine_policy_key_from_avg "$avg_usage")
@@ -283,35 +328,3 @@ main() {
 }
 
 main
-EOF
-
-chmod +x "$BIN_PATH"
-
-# 2. Service systemd
-cat <<EOF > "$SERVICE_PATH"
-[Unit]
-Description=Daemon Bayesiano de Otimização de CPU e ZRAM
-After=network.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-ExecStart=$BIN_PATH
-Restart=always
-RestartSec=3
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-echo "🔧 Recarregando systemd..."
-systemctl daemon-reexec
-systemctl daemon-reload
-
-echo "✅ Habilitando serviço no boot..."
-systemctl enable --now bayes_opt.service
-
-echo "📡 Status do serviço:"
-systemctl status bayes_opt.service --no-pager
-

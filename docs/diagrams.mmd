@@ -1,0 +1,18 @@
+flowchart LR
+  subgraph SENSORS
+    A["/proc/stat (CPU)"]
+    B["sensors (temp)"]
+    C["uptime (load)"]
+  end
+  A --> P[Processing]
+  B --> P
+  C --> P
+  P --> M[Memory\n(faz_o_urro)]
+  M --> POL[Policy\n(determine_policy_key_from_avg)]
+  POL --> ACT[Actuators\n(governor, TDP, ZRAM)]
+  ACT --> LOG["/var/log/bayes_mem/bayes.log"]
+  style SENSORS fill:#f9f,stroke:#333,stroke-width:1px
+  style P fill:#ff9,stroke:#333
+  style M fill:#9ff,stroke:#333
+  style POL fill:#9f9,stroke:#333
+  style ACT fill:#f99,stroke:#333
