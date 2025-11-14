@@ -1,9 +1,3 @@
-Here is the **clean, professional, fully reorganized README in English**, preserving all your content while making it coherent, structured, and ready for GitHub.
-
-If you want a shorter version, a more formal whitepaper version, or GitHub-Pages-ready docs, just say the word.
-
----
-
 # 🧠 **Adaptive Control System — README**
 
 This repository contains a prototype **Bayesian daemon** for adaptive optimization of Linux systems.
